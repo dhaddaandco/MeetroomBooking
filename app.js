@@ -197,7 +197,9 @@ function createActionButton(label, className, onClick) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = className;
-  button.textContent = label;
+  button.textContent = label === "Edit" ? "✎" : "×";
+  button.title = label;
+  button.setAttribute("aria-label", label);
   button.addEventListener("click", onClick);
   return button;
 }
@@ -272,20 +274,19 @@ function renderRooms() {
         item.classList.toggle("editing", booking.id === editingBookingId);
 
         const time = document.createElement("strong");
-        const team = document.createElement("span");
-        const purpose = document.createElement("span");
+        const detail = document.createElement("span");
         const actions = document.createElement("div");
 
+        detail.className = "booking-detail";
         actions.className = "booking-actions";
         time.textContent = `${formatTime(booking.fromTime)} - ${formatTime(booking.toTime)}`;
-        team.textContent = booking.teamName;
-        purpose.textContent = booking.purpose;
+        detail.textContent = `${booking.teamName} (${booking.purpose})`;
         actions.append(
           createActionButton("Edit", "mini-button edit", () => startEdit(booking)),
           createActionButton("Delete", "mini-button delete", () => deleteBooking(booking.id))
         );
 
-        item.append(time, team, purpose, actions);
+        item.append(time, detail, actions);
         list.append(item);
       });
 
