@@ -232,6 +232,12 @@ function startEdit(booking) {
 
 function deleteBooking(id) {
   const booking = bookings.find((item) => item.id === id);
+  const confirmed = window.confirm(`Delete booking for ${booking?.roomName || "this room"}?`);
+
+  if (!confirmed) {
+    return;
+  }
+
   bookings = bookings.filter((item) => item.id !== id);
   saveBookings();
   if (editingBookingId === id) {
