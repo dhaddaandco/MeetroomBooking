@@ -2,6 +2,17 @@ const LOGIN_ID = "DCO";
 const LOGIN_PASSWORD = "14331433";
 const MAX_DURATION_MINUTES = 120;
 const STORAGE_KEY = "meetingRoomBookings";
+const BOOKINGS_TABLE = "bookings";
+const supabaseConfig = window.DCO_SUPABASE_CONFIG || {};
+const isSupabaseConfigured = Boolean(
+  supabaseConfig.url
+  && supabaseConfig.anonKey
+  && !supabaseConfig.url.includes("PASTE_")
+  && !supabaseConfig.anonKey.includes("PASTE_")
+);
+const supabaseClient = isSupabaseConfigured && window.supabase
+  ? window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey)
+  : null;
 
 const rooms = [
   { name: "Manthan", floor: "3rd Floor" },
@@ -61,6 +72,7 @@ const clockSelects = {
 let activeFloor = "All";
 let editingBookingId = null;
 let bookings = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+let realtimeChannel = null;
 
 function toDateValue(date) {
   const copy = new Date(date);
@@ -74,8 +86,110 @@ function addDays(date, days) {
   return copy;
 }
 
-function saveBookings() {
+function saveLocalBookings() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(bookings));
+}
+
+function mapBookingFromDatabase(row) {
+  return {
+    id: row.id,
+    date: row.booking_date,
+    roomName: row.room_name,
+    floor: row.floor,
+    fromTime: row.from_time.slice(0, 5),
+    toTime: row.to_time.slice(0, 5),
+    teamName: row.team_name,
+    purpose: row.purpose
+  };
+}
+
+function mapBookingToDatabase(booking) {
+  return {
+    id: booking.id,
+    booking_date: booking.date,
+    room_name: booking.roomName,
+    floor: booking.floor,
+    from_time: booking.fromTime,
+    to_time: booking.toTime,
+    team_name: booking.teamName,
+    purpose: booking.purpose
+  };
+}
+
+async function loadBookings() {
+  if (!supabaseClient) {
+    setMessage("Using this device only. Add Supabase details to sync across devices.", "error");
+    renderRooms();
+    return;
+  }
+
+  const { data, error } = await supabaseClient
+    .from(BOOKINGS_TABLE)
+    .select("*")
+    .order("booking_date", { ascending: true })
+    .order("from_time", { ascending: true });
+
+  if (error) {
+    setMessage(`Supabase load failed: ${error.message}`, "error");
+    renderRooms();
+    return;
+  }
+
+  bookings = data.map(mapBookingFromDatabase);
+  renderRooms();
+  setMessage("Bookings synced across devices.", "success");
+}
+
+async function saveBookingToStore(booking) {
+  if (!supabaseClient) {
+    if (editingBookingId) {
+      bookings = bookings.map((item) => item.id === editingBookingId ? booking : item);
+    } else {
+      bookings = [...bookings, booking];
+    }
+    saveLocalBookings();
+    return { error: null };
+  }
+
+  const payload = mapBookingToDatabase(booking);
+  if (editingBookingId) {
+    return supabaseClient
+      .from(BOOKINGS_TABLE)
+      .update(payload)
+      .eq("id", editingBookingId);
+  }
+
+  return supabaseClient
+    .from(BOOKINGS_TABLE)
+    .insert(payload);
+}
+
+async function deleteBookingFromStore(id) {
+  if (!supabaseClient) {
+    bookings = bookings.filter((item) => item.id !== id);
+    saveLocalBookings();
+    return { error: null };
+  }
+
+  return supabaseClient
+    .from(BOOKINGS_TABLE)
+    .delete()
+    .eq("id", id);
+}
+
+function subscribeToBookingChanges() {
+  if (!supabaseClient || realtimeChannel) {
+    return;
+  }
+
+  realtimeChannel = supabaseClient
+    .channel("dco-booking-changes")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: BOOKINGS_TABLE },
+      () => loadBookings()
+    )
+    .subscribe();
 }
 
 function formatDate(dateValue) {
@@ -230,7 +344,7 @@ function startEdit(booking) {
   renderRooms();
 }
 
-function deleteBooking(id) {
+async function deleteBooking(id) {
   const booking = bookings.find((item) => item.id === id);
   const confirmed = window.confirm(`Delete booking for ${booking?.roomName || "this room"}?`);
 
@@ -238,12 +352,16 @@ function deleteBooking(id) {
     return;
   }
 
-  bookings = bookings.filter((item) => item.id !== id);
-  saveBookings();
+  const { error } = await deleteBookingFromStore(id);
+  if (error) {
+    setMessage(`Delete failed: ${error.message}`);
+    return;
+  }
+
   if (editingBookingId === id) {
     resetForm();
   }
-  renderRooms();
+  await loadBookings();
   setMessage(`${booking?.roomName || "Booking"} deleted.`, "success");
 }
 
@@ -317,6 +435,8 @@ function updateClock() {
 function showApp() {
   loginScreen.classList.add("is-hidden");
   appShell.classList.remove("is-hidden");
+  subscribeToBookingChanges();
+  loadBookings();
 }
 
 function showLogin() {
@@ -345,7 +465,7 @@ logoutButton.addEventListener("click", () => {
   showLogin();
 });
 
-bookingForm.addEventListener("submit", (event) => {
+bookingForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const roomSelect = document.querySelector("#roomName");
@@ -377,18 +497,19 @@ bookingForm.addEventListener("submit", (event) => {
     return;
   }
 
-  if (editingBookingId) {
-    bookings = bookings.map((booking) => booking.id === editingBookingId ? newBooking : booking);
-    setMessage("Booking updated successfully.", "success");
-  } else {
-    bookings = [...bookings, newBooking];
-    setMessage("Booking added successfully.", "success");
+  const { error } = await saveBookingToStore(newBooking);
+  if (error) {
+    setMessage(`Save failed: ${error.message}`);
+    return;
   }
 
   boardDate.value = newBooking.date;
-  saveBookings();
+  const successMessage = editingBookingId
+    ? "Booking updated successfully."
+    : "Booking added successfully.";
   resetForm();
-  renderRooms();
+  await loadBookings();
+  setMessage(successMessage, "success");
 });
 
 cancelEditButton.addEventListener("click", () => {
@@ -421,7 +542,7 @@ fillTeamOptions();
 fillClockOptions();
 setDateLimits();
 updateClock();
-renderRooms();
+loadBookings();
 setInterval(updateClock, 1000);
 
 if (sessionStorage.getItem("dcoLoggedIn") === "true") {
