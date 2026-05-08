@@ -7,12 +7,20 @@ const supabaseConfig = window.DCO_SUPABASE_CONFIG || {};
 const isSupabaseConfigured = Boolean(
   supabaseConfig.url
   && supabaseConfig.anonKey
+  && supabaseConfig.url.startsWith("https://")
   && !supabaseConfig.url.includes("PASTE_")
   && !supabaseConfig.anonKey.includes("PASTE_")
 );
-const supabaseClient = isSupabaseConfigured && window.supabase
-  ? window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey)
-  : null;
+let supabaseClient = null;
+
+try {
+  supabaseClient = isSupabaseConfigured && window.supabase
+    ? window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey)
+    : null;
+} catch (error) {
+  console.error("Supabase configuration error:", error);
+  supabaseClient = null;
+}
 
 const rooms = [
   { name: "Manthan", floor: "3rd Floor" },
